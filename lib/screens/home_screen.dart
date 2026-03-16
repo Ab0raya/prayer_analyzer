@@ -1,71 +1,295 @@
+import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'analysis_screen.dart';
+import 'package:prayer_analyzer/services/native_prayer_service.dart';
+import 'package:prayer_analyzer/widgets/native_camera_preview.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
-  Future<void> _pickImage(BuildContext context) async {
-    // Request permissions
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.storage,
-      Permission.photos,
-    ].request();
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
 
-    // Check if permission granted (or limited on iOS)
-    // On Android 13+, usage of photos permission is key.
+class _HomeScreenState extends State<HomeScreen> {
+  final NativePrayerService _nativeService = NativePrayerService();
+  StreamSubscription? _subscription;
+  bool _isAnalyzing = false;
+  File? _selectedImage;
+  final ImagePicker _picker = ImagePicker();
 
-    final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 640,
-      maxHeight: 640,
-    );
+  // To display results
+  String _label = "Waiting...";
+  String _confidence = "0.0%";
+  String _time = "0ms";
 
-    if (image != null) {
-      if (context.mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => AnalysisScreen(imagePath: image.path),
+  @override
+  void initState() {
+    super.initState();
+    _requestPermission();
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _requestPermission() async {
+    await Permission.camera.request();
+  }
+
+  Future<void> _pickAndAnalyzeImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image != null) {
+        _stopLiveAnalysis();
+        _clearSelection();
+
+        setState(() {
+          _selectedImage = File(image.path);
+          _label = "Analyzing Image...";
+        });
+
+        final result = await _nativeService.analyzeImage(image.path);
+
+        if (mounted && result != null) {
+          setState(() {
+            _label = result.label;
+            _confidence = "${(result.confidence * 100).toStringAsFixed(1)}%";
+            _time = "${result.inferenceTime}ms";
+          });
+        } else if (mounted) {
+          setState(() {
+            _label = "Analysis Failed";
+          });
+        }
+      }
+    } catch (e) {
+      print("Error picking image: $e");
+    }
+  }
+
+  Future<void> _pickAndAnalyzeVideo() async {
+    try {
+      final XFile? video = await _picker.pickVideo(source: ImageSource.gallery);
+      if (video != null) {
+        _stopLiveAnalysis();
+        _clearSelection();
+
+        setState(() {
+          _selectedImage = null;
+          _label = "Analyzing Video...";
+          _confidence = "";
+          _time = "";
+        });
+
+        final results = await _nativeService.analyzeVideo(video.path);
+
+        if (mounted) {
+          _showVideoReport(results);
+          setState(() {
+            _label = "Video Analysis Complete";
+          });
+        }
+      }
+    } catch (e) {
+      print("Error picking video: $e");
+    }
+  }
+
+  void _showVideoReport(List<VideoAnalysisResult> results) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Video Analysis Report",
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: results.length,
+                  itemBuilder: (context, index) {
+                    final item = results[index];
+                    final timeSec = (item.timestampMs / 1000).toStringAsFixed(
+                      1,
+                    );
+                    return ListTile(
+                      leading: Text("${timeSec}s"),
+                      title: Text(item.label),
+                      subtitle: Text(
+                        "Confidence: ${(item.confidence * 100).toStringAsFixed(1)}%",
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         );
-      }
+      },
+    );
+  }
+
+  void _stopLiveAnalysis() {
+    if (_isAnalyzing) {
+      _nativeService.stopInference();
+      _subscription?.cancel();
+      _subscription = null;
+      setState(() {
+        _isAnalyzing = false;
+      });
+    }
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedImage = null;
+      _label = "Waiting...";
+      _confidence = "0.0%";
+      _time = "0ms";
+    });
+  }
+
+  void _clearImage() => _clearSelection();
+
+  void _toggleAnalysis() {
+    if (_isAnalyzing) {
+      _stopLiveAnalysis();
+      setState(() {
+        _label = "Stopped";
+      });
+    } else {
+      // Ensure we are in camera mode
+      _clearSelection();
+
+      _nativeService.startInference();
+      setState(() => _isAnalyzing = true);
+
+      // Listen to the stream
+      _subscription = _nativeService.postureStream.listen((result) {
+        print("Dart received: ${result.label} ${result.confidence}");
+        if (mounted) {
+          setState(() {
+            _label = result.label;
+            _confidence = "${(result.confidence * 100).toStringAsFixed(1)}%";
+            _time = "${result.inferenceTime}ms";
+          });
+        }
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Prayer Analysis'), centerTitle: true),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.image, size: 100, color: Colors.blueGrey),
-            const SizedBox(height: 20),
-            const Text(
-              'Select an image to analyze prayer posture',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 40),
-            ElevatedButton.icon(
-              onPressed: () => _pickImage(context),
-              icon: const Icon(Icons.add_photo_alternate),
-              label: const Text('Select Image'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 16,
-                ),
-                textStyle: const TextStyle(fontSize: 18),
+      appBar: AppBar(title: const Text("Prayer Posture Analyzer")),
+      body: Stack(
+        children: [
+          // Background: Camera Preview OR Static Image
+          Positioned.fill(
+            child: _selectedImage != null
+                ? Image.file(_selectedImage!, fit: BoxFit.cover)
+                : const NativeCameraPreview(),
+          ),
+
+          if (_selectedImage != null)
+            Positioned(
+              top: 20,
+              right: 20,
+              child: FloatingActionButton.small(
+                onPressed: _clearImage,
+                backgroundColor: Colors.red,
+                child: const Icon(Icons.close, color: Colors.white),
               ),
             ),
-          ],
-        ),
+
+          // Foreground: Controls and Results
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              color: Colors.black54,
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "Posture: $_label",
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    "Confidence: $_confidence  |  Time: $_time",
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 20),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 20,
+                    runSpacing: 20,
+                    children: [
+                      if (_selectedImage == null) ...[
+                        ElevatedButton(
+                          onPressed: _toggleAnalysis,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _isAnalyzing
+                                ? Colors.red
+                                : Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 15,
+                            ),
+                          ),
+                          child: Text(_isAnalyzing ? "Stop" : "Live"),
+                        ),
+                        FloatingActionButton(
+                          heroTag: "toggle",
+                          onPressed: () {
+                            _nativeService.toggleCamera();
+                          },
+                          backgroundColor: Colors.white,
+                          child: const Icon(
+                            Icons.cameraswitch,
+                            color: Colors.blue,
+                          ),
+                        ),
+                      ],
+                      FloatingActionButton(
+                        heroTag: "gallery",
+                        onPressed: _pickAndAnalyzeImage,
+                        backgroundColor: Colors.white,
+                        child: const Icon(Icons.image, color: Colors.orange),
+                      ),
+                      FloatingActionButton(
+                        heroTag: "video",
+                        onPressed: _pickAndAnalyzeVideo,
+                        backgroundColor: Colors.white,
+                        child: const Icon(
+                          Icons.video_library,
+                          color: Colors.purple,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

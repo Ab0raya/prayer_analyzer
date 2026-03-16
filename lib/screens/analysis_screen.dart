@@ -25,7 +25,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Future<void> _startAnalysis() async {
     await _analysisService.initialize();
     if (mounted) {
-      _analysisService.analyzeImage(widget.imagePath);
+      final bytes = await File(widget.imagePath).readAsBytes();
+      _analysisService.analyzeImage(bytes);
     }
   }
 

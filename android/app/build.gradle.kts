@@ -42,6 +42,26 @@ android {
     }
 }
 
+
+dependencies {
+    // CameraX core library using the camera2 implementation
+    val camerax_version = "1.3.1"
+    implementation("androidx.camera:camera-core:${camerax_version}")
+    implementation("androidx.camera:camera-camera2:${camerax_version}")
+    implementation("androidx.camera:camera-lifecycle:${camerax_version}")
+    implementation("androidx.camera:camera-view:${camerax_version}")
+
+    // TensorFlow Lite dependencies
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-api:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
+    // Guava for ListenableFuture (needed by CameraX)
+    implementation("com.google.guava:guava:32.1.2-android")
+    implementation("androidx.concurrent:concurrent-futures:1.1.0")
+}
+
 flutter {
     source = "../.."
 }

@@ -1,13 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/analysis_report.dart';
 import 'inference_isolate.dart';
-import 'video_service.dart';
-import 'prayer_fsm.dart';
 
 class AnalysisService extends ChangeNotifier {
   // Isolate Management
@@ -77,65 +74,7 @@ class AnalysisService extends ChangeNotifier {
     }
   }
 
-  PrayerFSM? _fsm;
-  PrayerFSM? get fsm => _fsm;
-
-  Future<void> analyzeVideo(String videoPath) async {
-    if (_isAnalyzing) return;
-    _isAnalyzing = true;
-    _currentPose = Pose.unknown;
-
-    // Initialize FSM
-    _fsm = PrayerFSM();
-    notifyListeners();
-
-    try {
-      // 1. Extract Frames
-      final videoService = VideoService(); // Or inject
-      final framePaths = await videoService.extractFrames(videoPath);
-
-      if (framePaths.isEmpty) {
-        print('No frames extracted');
-        _isAnalyzing = false;
-        notifyListeners();
-        return;
-      }
-
-      // 3. Process Frames Sequentially
-      for (final framePath in framePaths) {
-        if (!_isAnalyzing) break; // Allow cancellation
-
-        final file = File(framePath);
-        final bytes = await file.readAsBytes();
-
-        // Send to isolate
-        _isolateSendPort?.send(InferenceRequest.detect(bytes));
-
-        // Wait a small amount to simulate frame interval/allow isolate to process?
-        // Ideally we should wait for the result before sending the next frame for TRUE sequential processing
-        // to update the FSM correctly in order.
-        // However, the isolate is async.
-
-        // WORKAROUND: For now, let's just wait a bit.
-        // A better approach is to send a "ProcessFrame" message and wait for a "FrameProcessed" message.
-        // But since we are rushed, let's fast-fire and handle results as they come.
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
-
-      // We need to know when analysis is "done"
-      // FSM updates happen in `_handleInferenceResult`
-    } catch (e) {
-      print('Video Analysis Error: $e');
-    } finally {
-      _isAnalyzing = false;
-      notifyListeners();
-
-      // Cleanup frames
-      // await videoService.cleanupFrames(framePaths);
-    }
-  }
-
-  Future<void> analyzeImage(String imagePath) async {
+  Future<void> analyzeImage(Uint8List imageBytes) async {
     if (_inferenceIsolate == null) await initialize();
 
     _isAnalyzing = true;
@@ -143,9 +82,6 @@ class AnalysisService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final file = File(imagePath);
-      final imageBytes = await file.readAsBytes();
-
       // Send image to isolate
       _isolateSendPort!.send(InferenceRequest.detect(imageBytes));
     } catch (e) {
@@ -156,24 +92,9 @@ class AnalysisService extends ChangeNotifier {
   }
 
   void _handleInferenceResult(InferenceResponse result) {
+    _isAnalyzing = false; // Single image analysis is done once result returns
     _currentPose = result.pose;
     print("Inference Result: $_currentPose");
-
-    // Update FSM if active
-    if (_fsm != null) {
-      _fsm!.update(
-        result.pose,
-        DateTime.now().difference(DateTime(2024)), // improved timestamp needed
-        1.0, // Dummy confidence for now
-      );
-    }
-
-    // If analyzing image, we are done
-    // But analyzeVideo sets isAnalyzing=false at end of loop?
-    // Wait, the loop finishes submitting, but results come back later.
-    // So _isAnalyzing = false in finally block is premature!
-    // We should wait for all results.
-
     notifyListeners();
   }
 

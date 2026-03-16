@@ -1,7 +1,9 @@
-import 'package:ffmpeg_kit_flutter_min_gpl/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_min_gpl/return_code.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:image_picker/image_picker.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:video_player/video_player.dart';
 
 class VideoService {
   final ImagePicker _picker = ImagePicker();
@@ -10,58 +12,42 @@ class VideoService {
     return await _picker.pickVideo(source: ImageSource.gallery);
   }
 
-  /// Extracts frames from video at [fps] (frames per second).
-  /// Returns a list of absolute paths to the extracted images.
-  Future<List<String>> extractFrames(String videoPath, {int fps = 5}) async {
-    final tempDir = await getTemporaryDirectory();
-    final String framesDir = path.join(tempDir.path, 'frames_${DateTime.now().millisecondsSinceEpoch}');
-    await Directory(framesDir).create();
-
-    // Output pattern: frame_0001.jpg, frame_0002.jpg, ...
-    final String startNumber = '00001';
-    final String outPath = path.join(framesDir, 'frame_%05d.jpg');
-
-    // FFmpeg command: -i video -vf fps=5 out_dir/frame_%05d.jpg
-    // -fps_mode vfr ensures variable frame rate handling if needed
-    final String command = '-i "$videoPath" -vf fps=$fps -start_number 1 "$outPath"';
-
-    print('FFmpeg Start: $command');
-    final session = await FFmpegKit.execute(command);
-    final returnCode = await session.getReturnCode();
-
-    if (ReturnCode.isSuccess(returnCode)) {
-      print('FFmpeg Success');
-      // List and sort files to ensure order
-      final dir = Directory(framesDir);
-      final List<FileSystemEntity> entities = dir.listSync();
-      final List<String> framePaths = entities
-          .whereType<File>()
-          .map((e) => e.path)
-          .where((p) => p.endsWith('.jpg'))
-          .toList();
-
-      framePaths.sort(); // Ensure alphanumeric sort (00001, 00002...)
-      return framePaths;
-    } else {
-      print('FFmpeg Failed');
-      final logs = await session.getLogs();
-      for (var log in logs) {
-        print(log.getMessage());
-      }
-      return [];
+  Future<Duration?> getVideoDuration(String path) async {
+    final controller = VideoPlayerController.file(File(path));
+    try {
+      await controller.initialize();
+      return controller.value.duration;
+    } catch (e) {
+      return null;
+    } finally {
+      await controller.dispose();
     }
   }
 
-  // Cleanup frames after analysis
-  Future<void> cleanupFrames(List<String> framePaths) async {
-    if (framePaths.isEmpty) return;
-    try {
-      final dir = Directory(path.dirname(framePaths.first));
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
+  Stream<Uint8List> streamFrames(
+    String videoPath, {
+    int intervalMs = 200,
+  }) async* {
+    final duration = await getVideoDuration(videoPath);
+    if (duration == null) return;
+
+    int currentTime = 0;
+    final int totalDurationMs = duration.inMilliseconds;
+
+    while (currentTime <= totalDurationMs) {
+      final uint8list = await VideoThumbnail.thumbnailData(
+        video: videoPath,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 640,
+        quality: 50,
+        timeMs: currentTime,
+      );
+
+      if (uint8list != null) {
+        yield uint8list;
       }
-    } catch (e) {
-      print('Error cleaning up frames: $e');
+
+      currentTime += intervalMs;
     }
   }
 }
