@@ -29,6 +29,8 @@ class PrayerAnalyzer(private val context: Context) {
 
     private var interpreter: Interpreter? = null
     private var inputImageBuffer: TensorImage? = null
+    private var cachedImageProcessor: ImageProcessor? = null
+    private var cachedOutputBuffer: ByteBuffer? = null
     // Flutter assets are stored in this path within the Android assets
     private val modelPath = "flutter_assets/assets/models/best_int8.tflite"
     private val labels = PrayerConfig.CLASSES
@@ -77,41 +79,36 @@ class PrayerAnalyzer(private val context: Context) {
         val width = inputShape[2]
         val dataType = inputTensor.dataType()
 
-        // 1. Preprocess
-        val imageProcessorBuilder = ImageProcessor.Builder()
-            .add(ResizeOp(height, width, ResizeOp.ResizeMethod.BILINEAR))
-            // .add(Rot90Op(-rotation / 90)) // Handled by caller or ignored if Bitmap is already upright
-            
-        // If model expects Float between 0 and 1, we must normalize.
-        // TensorImage loads Bitmap (0-255).
-        if (dataType == org.tensorflow.lite.DataType.FLOAT32) {
-             imageProcessorBuilder.add(org.tensorflow.lite.support.common.ops.NormalizeOp(0f, 255f))
+        // 1. Preprocess - use cached processor for performance
+        if (cachedImageProcessor == null) {
+            val imageProcessorBuilder = ImageProcessor.Builder()
+                .add(ResizeOp(height, width, ResizeOp.ResizeMethod.NEAREST_NEIGHBOR))
+
+            if (dataType == org.tensorflow.lite.DataType.FLOAT32) {
+                 imageProcessorBuilder.add(org.tensorflow.lite.support.common.ops.NormalizeOp(0f, 255f))
+            }
+            cachedImageProcessor = imageProcessorBuilder.build()
         }
 
-        val imageProcessor = imageProcessorBuilder.build()
-            
         inputImageBuffer!!.load(bitmap)
-        val processedImage = imageProcessor.process(inputImageBuffer)
+        val processedImage = cachedImageProcessor!!.process(inputImageBuffer)
 
-        // 2. Run Inference
+        // 2. Run Inference - reuse output buffer
         val outputTensor = interpreter!!.getOutputTensor(0)
         val outputShape = outputTensor.shape() // Expected: [1, 8, 8400]
+
+        if (cachedOutputBuffer == null || cachedOutputBuffer!!.capacity() != outputTensor.numBytes()) {
+            cachedOutputBuffer = ByteBuffer.allocateDirect(outputTensor.numBytes())
+            cachedOutputBuffer!!.order(ByteOrder.nativeOrder())
+        }
+        cachedOutputBuffer!!.rewind()
         
-        // Check standard YOLOv8 output shape [1, 84, 8400] or [1, 8, 8400]
-        // 4 coords + 4 classes = 8 channels
-        // Anchors = 8400
-        
-        // Allocate buffer
-        val outputBuffer = ByteBuffer.allocateDirect(outputTensor.numBytes())
-        outputBuffer.order(ByteOrder.nativeOrder())
-        
-        interpreter!!.run(processedImage.buffer, outputBuffer)
+        interpreter!!.run(processedImage.buffer, cachedOutputBuffer)
 
         // 3. Post-process (YOLOv8 parsing)
-        outputBuffer.rewind()
+        cachedOutputBuffer!!.rewind()
         
-        // Read as FloatBuffer for easier access
-        val floatBuffer = outputBuffer.asFloatBuffer()
+        val floatBuffer = cachedOutputBuffer!!.asFloatBuffer()
         
         // Shape [1, 8, 8400]
         // Flattened: [row0..row7] where each row has 8400 elements.

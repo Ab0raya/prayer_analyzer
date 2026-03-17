@@ -100,11 +100,13 @@ class PrayerPostureResult {
   final String label;
   final double confidence;
   final int inferenceTime;
+  final double progress;
 
   PrayerPostureResult({
     required this.label,
     required this.confidence,
     required this.inferenceTime,
+    this.progress = 0.0,
   });
 
   factory PrayerPostureResult.fromMap(Map<String, dynamic> map) {
@@ -112,6 +114,7 @@ class PrayerPostureResult {
       label: map['label'] as String,
       confidence: (map['confidence'] as num).toDouble(),
       inferenceTime: (map['inferenceTime'] as num).toInt(),
+      progress: map.containsKey('progress') ? (map['progress'] as num).toDouble() : 0.0,
     );
   }
 

@@ -55,7 +55,7 @@ Future<void> inferenceWorker(SendPort mainSendPort) async {
         try {
           final bytes = message.modelBytes;
           if (bytes != null) {
-            await _yoloService!.loadModel(bytes);
+            await _yoloService.loadModel(bytes);
             message.sendPort?.send(true); // Signal success
           } else {
             print("Init Error: Model bytes missing");
@@ -69,7 +69,7 @@ Future<void> inferenceWorker(SendPort mainSendPort) async {
         if (_yoloService != null && message.frameData != null) {
           final stopwatch = Stopwatch()..start();
           try {
-            final pose = await _yoloService!.detectPose(message.frameData!);
+            final pose = await _yoloService.detectPose(message.frameData!);
             stopwatch.stop();
             mainSendPort.send(
               InferenceResponse(pose, stopwatch.elapsedMilliseconds),

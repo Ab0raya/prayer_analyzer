@@ -17,7 +17,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final NativePrayerService _nativeService = NativePrayerService();
   StreamSubscription? _subscription;
+  StreamSubscription? _videoSubscription;
   bool _isAnalyzing = false;
+  bool _isVideoAnalyzing = false;
+  double _videoProgress = 0.0;
   File? _selectedImage;
   final ImagePicker _picker = ImagePicker();
 
@@ -35,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _subscription?.cancel();
+    _videoSubscription?.cancel();
     super.dispose();
   }
 
@@ -85,15 +89,33 @@ class _HomeScreenState extends State<HomeScreen> {
           _label = "Analyzing Video...";
           _confidence = "";
           _time = "";
+          _isVideoAnalyzing = true;
+          _videoProgress = 0.0;
+        });
+
+        _videoSubscription = _nativeService.postureStream.listen((result) {
+          if (mounted) {
+            setState(() {
+              _label = result.label;
+              _confidence = "${(result.confidence * 100).toStringAsFixed(1)}%";
+              _time = "${result.inferenceTime}ms";
+              _videoProgress = result.progress;
+            });
+            print("Video Analysis: ${result.label} (${_confidence}) - Progress: ${(_videoProgress * 100).toStringAsFixed(1)}%");
+          }
         });
 
         final results = await _nativeService.analyzeVideo(video.path);
 
+        _videoSubscription?.cancel();
+        _videoSubscription = null;
+
         if (mounted) {
-          _showVideoReport(results);
           setState(() {
+            _isVideoAnalyzing = false;
             _label = "Video Analysis Complete";
           });
+          _showVideoReport(results);
         }
       }
     } catch (e) {
@@ -230,6 +252,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: Colors.white,
                     ),
                   ),
+                  if (_isVideoAnalyzing) ...[
+                    const SizedBox(height: 10),
+                    LinearProgressIndicator(
+                      value: _videoProgress,
+                      backgroundColor: Colors.white24,
+                      color: Colors.green,
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   Text(
                     "Confidence: $_confidence  |  Time: $_time",
